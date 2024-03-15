@@ -1,116 +1,180 @@
-select location, date, total_cases, new_cases, total_deaths, population
-from PortfolioProject..CovidDeaths
-order by 1,2
+--Standardize Date Format--
+select SaleDate1
+from NashvilleHousing
 
--- a) Looking at Total Cases VS Total Deaths
+update NashvilleHousing
+set SaleDate1 = CONVERT(date,SaleDate)
+--> This should have worked on its own to update the original 'SaleDate' Column
+---> If it doesn' work, use the 'Alter' function where we will 'Add' a new column with the desired formate
+----> Then we run the 'Update' function except we will now update the newly created column to have the desired format from the original column
+alter table nashvillehousing
+add SaleDate1 date
 
-select location, date, total_cases, total_deaths, (total_deaths/total_cases)*100
-from PortfolioProject..CovidDeaths
-order by 1,2
-
--- b) Specifying the Country
-----Showing the likelihood of dying if you got infected in your country
-select location, date, total_cases, total_deaths, (total_deaths/total_cases)*100 DeathPercentage
-from PortfolioProject..CovidDeaths
-where location like '%stat%'
-order by 1,2
-
---Looking at Total Cases VS Population
-----Shows what percentage of the population gets covid
-select location, date, total_cases, population, (total_cases/population)*100 as CasesPercentage
-from PortfolioProject..CovidDeaths
-where location like '%gyp%'
-order by 1,2
-
---Looking at Countries with Highest Infection Rate compared to Population
-select location, population, max(total_cases) TotalCases, max(total_cases/population)*100 as CasesPercentage
-from PortfolioProject..CovidDeaths
-group by location, population
-order by 4 desc
-
---Countries with the highest death count per population
-----'Cast' is for converting the varchar type column into int as the arrangement was not correct
-----We added 'where continent is not null' because in this table when the continents where shown in the data as a country because of a shift in the continent name when it is blank a [and this is a special error that varies from a set of data to another]
-select location, MAX(cast(total_deaths as int)) as HighestDeaths
-from PortfolioProject..CovidDeaths
-where continent is not null
-group by location
-order by HighestDeaths desc
---Continent
-select continent, MAX(cast(total_deaths as int)) as HighestDeaths
-from PortfolioProject..CovidDeaths
-where continent is not null
-group by continent
-order by HighestDeaths desc
-
---Global Numbers
-select date, sum(new_cases) TotalCases, sum(cast(new_deaths as int)) TotalDeaths, sum(cast(new_deaths as int))/sum(new_cases) * 100 DeathPercentage
-from PortfolioProject..CovidDeaths
-where continent is not null
-group by date
-order by 1,2 desc
---Or we can remove the date altogether if we want just one global number
-
---Looking at Total Population VS Vaccination
-
-select dea.continent, dea.location, dea.date, dea.population, vac.new_vaccinations,
---sum(cast(vac.new_vaccinations as int))
-sum(convert(int, vac.new_vaccinations)) --The Same--
-over (partition by dea.location order by dea.location, dea.date) as RollingPeopleVaccinated
---The over partition by is important as it shows what the summations will be based on and without it, it will return an error anyway
---We put inside the over and order by location and date so that it keeps adding up in the summation total until the end instead of puttin the whole total of the location in all the cells
-from PortfolioProject..CovidDeaths dea
-join PortfolioProject..CovidVaccinations vac
-on dea.location = vac.location and dea.date = vac.date
-where dea.continent is not null
-order by 2,3
---This is where the role of the CTE or the Temp table comes in as here we need to divid the sum of the new vaccinations [The variable: RollingPeopleVaccinated] over the population. But, we can't use a variable we created that way unless it is an actual column so:
-with ForRPVvsPopulation (continent, location, date, population, new_vaccinations, RollingPeopleVaccinated) --The number of columns here must be the same as those of the 'select' below--
-as
-(
-select dea.continent, dea.location, dea.date, dea.population, vac.new_vaccinations, sum(convert(int, vac.new_vaccinations)) over (partition by dea.location order by dea.location, dea.date) as RollingPeopleVaccinated
-from PortfolioProject..CovidDeaths dea
-join PortfolioProject..CovidVaccinations vac
-on dea.location = vac.location and dea.date = vac.date
-where dea.continent is not null
---order by 2,3    "This order by returns an error in CTE"
-)
-select *, (RollingPeopleVaccinated/population)*100 as VacToPopulation
-from ForRPVvsPopulation
-
---OR--
-
-create table #PercentPopulationVaccinated
-(continent nvarchar(255), --new and almost the same datatypes--
-location nvarchar(255),
-date datetime,
-population numeric,
-new_vaccinations numeric,
-RollingPeopleVaccinated numeric)
-
-insert into #PercentPopulationVaccinated
-select dea.continent, dea.location, dea.date, dea.population, vac.new_vaccinations, sum(convert(int, vac.new_vaccinations)) over (partition by dea.location order by dea.location, dea.date) as RollingPeopleVaccinated
-from PortfolioProject..CovidDeaths dea
-join PortfolioProject..CovidVaccinations vac
-on dea.location = vac.location and dea.date = vac.date
-where dea.continent is not null
-
-select *, (RollingPeopleVaccinated/population)*100 as VacToPopulation
-from #PercentPopulationVaccinated
-
---Remember--
-Drop table if exists #PercentPopulationVaccinated --if need be
-
---Create View
---It's permenant and almost the same as the table--dosn't accept order by
---found in 'views'
-create view PercentPopulationVaccinated as
-select dea.continent, dea.location, dea.date, dea.population, vac.new_vaccinations, sum(convert(int, vac.new_vaccinations)) over (partition by dea.location order by dea.location, dea.date) as RollingPeopleVaccinated
-from PortfolioProject..CovidDeaths dea
-join PortfolioProject..CovidVaccinations vac
-on dea.location = vac.location and dea.date = vac.date
-where dea.continent is not null
-
+--Populate property address data--
 select *
-from PercentPopulationVaccinated
---Now Save on GitHub--
+from NashvilleHousing
+where PropertyAddress is null
+--> So here, some of the property adresses are 'NULL' and we need to find a way to have the right addresses there
+---> The method we will be using here is that we will look for parcel IDs that are similar where one has the address and the other doesn't and we will fill them
+----> To do that, we will have to join the table to itself using the 'ParcelID' but to have the parcelID joind with the same parcelID number but from a different row so that we could find if the address was written correctly for it in another row, we need to specify that the Join will link different 'UniqeIds'
+select a.ParcelID, a.PropertyAddress, b.ParcelID, b.PropertyAddress, ISNULL(a.PropertyAddress, b.PropertyAddress)
+from NashvilleHousing a
+join NashvilleHousing b
+on a.ParcelID = b.ParcelID
+and a.[UniqueID ] <> b.[UniqueID ]
+where a.PropertyAddress is null
+--> Now we have the same PacelID joined by itself but from a different row because of the unique id condition
+---> the ISNULL part is to show what we will put instead of the NULL
+--> Now we need to UPDATE the Null part with the replacement in the ISNULL
+Update a
+set PropertyAddress = ISNULL(a.PropertyAddress, b.PropertyAddress)
+from NashvilleHousing a
+join NashvilleHousing b
+on a.ParcelID = b.ParcelID
+and a.[UniqueID ] <> b.[UniqueID ]
+where a.PropertyAddress is null
+--> Now return and run the previous function and it will return nothing
+--> We should know that when update a JOIN function, we have to use the alias i.e. "a" 
+
+
+--Breaking Out Address into Individual Columns (Address, City, State)
+select PropertyAddress
+from PortfolioProject..NashvilleHousing
+--First: Take the adrress by stopping at the comma that exists before the city
+select
+SUBSTRING(PropertyAddress, 1, charindex(',', PropertyAddress)-1) Address
+from PortfolioProject..NashvilleHousing
+--> So, it's the SUBSTRING that takes a part of the string, Inside we define the column we want to take a part from 'PropertyAddress', Then where to start from '1', Then the CHARINDEX where we don't want to stop at a specific order but at a symbole ',' in PropertyAddress. The final '-1' is for going back one step in order not to take the comma with us
+--> For the city we will easily reverse things, start from the CHARINDEX and +1 so that we start after the comma, then we go until the full length (LEN) left of the PropertyAddress
+select SUBSTRING(PropertyAddress, 1, CHARINDEX(',', PropertyAddress) -1) as Address, SUBSTRING(PropertyAddress, CHARINDEX(',', PropertyAddress) +1, LEN(PropertyAddress)) as City
+from PortfolioProject..NashvilleHousing
+--> Now we create the 2 columns to add them
+Alter table PortfolioProject..NashvilleHousing
+Add Address nvarchar(255)
+
+update PortfolioProject..NashvilleHousing
+set Address = SUBSTRING(PropertyAddress, 1, CHARINDEX(',', PropertyAddress) -1)
+
+Alter table PortfolioProject..NashvilleHousing
+Add City nvarchar(255)
+
+update PortfolioProject..NashvilleHousing
+set City = SUBSTRING(PropertyAddress, CHARINDEX(',', PropertyAddress) +1, LEN(PropertyAddress))
+--> Run the 'ALTER' function to add the column first
+--> Then run the update function to add data to that new column
+---> Now Check..
+select *
+from PortfolioProject..NashvilleHousing
+--> The 2 columns are added to the end
+---> We need to separate the Owner address too, but it has two commas so, we won't be able to use the SUBSTRING function
+---> We can use the PARSENAME which is less complicated than the SUBSTRING but only separates at 'Dots' not commas so, inside the parsename we will replace the commas with dots
+select OwnerAddress
+from PortfolioProject..NashvilleHousing --just to see how it looks--
+
+select
+PARSENAME(Replace(OwnerAddress, ',', '.'), 3)
+from PortfolioProject..NashvilleHousing
+--The other thing with the PARSENAME is that it separates backwards, so we picked '3' rd part as we knew it will separate the owneraddress into 3 parts and '3' will give us the first one
+select 
+PARSENAME(REPLACE(OwnerAddress, ',', '.'), 3),
+PARSENAME(REPLACE(OwnerAddress, ',', '.'), 2),
+PARSENAME(REPLACE(OwnerAddress, ',', '.'), 1)
+from PortfolioProject..NashvilleHousing
+--> Now add them for real
+Alter Table PortfolioProject..NashvilleHousing
+Add OwnerAddress1 nvarchar(255)
+
+Update PortfolioProject..NashvilleHousing
+set OwnerAddress1 = PARSENAME(REPLACE(OwnerAddress, ',', '.'), 3)
+
+Alter Table PortfolioProject..NashvilleHousing
+Add OwnerCity1 nvarchar(255)
+
+Update PortfolioProject..NashvilleHousing
+set OwnerCity1 = PARSENAME(REPLACE(OwnerAddress, ',', '.'), 2)
+
+Alter Table PortfolioProject..NashvilleHousing
+Add OwnerState1 nvarchar(255)
+
+Update PortfolioProject..NashvilleHousing
+set OwnerState1 = PARSENAME(REPLACE(OwnerAddress, ',', '.'), 1)
+
+--> Now check them at the end
+select *
+from PortfolioProject..NashvilleHousing
+--> N.B: Again, Run the 'ALTER' first then run the 'UPDATE' one at a time
+
+--Change 'Y' &  'N' into 'Yes' and 'No
+-->The column 'SoldAsVacant' has yes, No, Y and N and we want to nmake them all yes and no
+--> I am sure there are many ways to do that but here we will use a CASE statement
+
+select SoldAsVacant, count(SoldAsVacant)
+from PortfolioProject..NashvilleHousing
+group by SoldAsVacant			--Just to see them--
+
+select SoldAsVacant,
+case when SoldAsVacant = 'Y' Then 'Yes'
+	 when SoldAsVacant = 'N' Then 'No'
+	 Else SoldAsVacant
+End
+from PortfolioProject..NashvilleHousing
+
+update PortfolioProject..NashvilleHousing
+set SoldAsVacant = case 
+	 when SoldAsVacant = 'Y' Then 'Yes'
+	 when SoldAsVacant = 'N' Then 'No'
+	 Else SoldAsVacant
+End
+--> Now Check
+Select SoldAsVacant, count(soldasvacant)
+from PortfolioProject..NashvilleHousing
+group by SoldAsVacant
+------Voila-----
+
+--------------------------------REMOVE DUPLICATES--------------------------------------
+SELECT *
+from PortfolioProject..NashvilleHousing
+--> Here we will use 'ROW_NUMBER' function which when detects two identical values in the same partition, it assigns different rank numbers to both. Of course for that it will be followed by 'OVER() PARTITION BY' as we will need to specify what columns we will need to state that the rows are duplicates based on
+select *,
+		ROW_NUMBER() over(
+		partition by ParcelID,
+					 PropertyAddress,
+					 SalePrice,
+					 LegalReference
+		order by UniqueID
+		) row_num
+from PortfolioProject..NashvilleHousing
+--> The 'row_num' here is not an actual column in the table and we don't need to alter and add the column to the table to filter and delete values based on it.
+--> so we will use CTE [Temp Table] like thing
+WITH RowNumCTE as(
+select *,
+		ROW_NUMBER() over (
+		partition by ParcelID,
+					 PropertyAddress,
+					 SalePrice,
+					 LegalReference
+					 order by uniqueID
+					 ) row_num
+from PortfolioProject..NashvilleHousing
+)
+--> Now we can use the temporarily added column to see the duplicates
+select *
+from RowNumCTE
+where row_num > 1
+--> N.B: We should run the whole CTE with the query to get the result
+-->Now we remove the duplicates
+delete
+from RowNumCTE
+where row_num > 1
+--> Now check the previously commented query again to see if there are any duplicates
+--> Removing Duplicates is not very recommended in SQL
+
+------------------------------DELETE UNUSED COLUMNS------------------------------------
+Select *
+from PortfolioProject..NashvilleHousing
+
+alter table PortfolioProject..NashvilleHousing
+drop column OwnerAddress, TaxDistrict, PropertyAddress, SaleDate
+
+------------------------That's it for the Cleaning Data Project------------------------
+--04:28:41--
